@@ -14,7 +14,7 @@ bibtex_bibfiles:
   - references.bib
 
 exclude:
-  - book/references.bib
+  - references.bib
 
 repository:
   url: https://github.com/wendy062644/wendy062644-2025-summer-intern-project-1
@@ -33,4 +33,3 @@ sphinx:
     html_extra_path: ["assets"]
     html_css_files:
       - book.css
-    
