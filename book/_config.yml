@@ -13,6 +13,9 @@ latex:
 bibtex_bibfiles:
   - references.bib
 
+exclude:
+  - book/references.bib
+
 repository:
   url: https://github.com/wendy062644/wendy062644-2025-summer-intern-project-1
   path_to_book: ""
