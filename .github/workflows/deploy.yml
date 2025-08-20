@@ -1,8 +1,7 @@
-name: Build & Deploy Jupyter Book
-
+name: Deploy Jupyter Book to Pages
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -10,42 +9,21 @@ permissions:
   pages: write
   id-token: write
 
-concurrency:
-  group: "pages"
-  cancel-in-progress: true
-
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
-      - name: Install Jupyter Book
-        run: |
-          python -m pip install -U pip
-          pip install "jupyter-book>=1.0.0"
-
-      # 只有當 _toc.yml / _toc.yaml 都不存在時才自動產生
-      - name: Generate ToC if missing
-        if: ${{ hashFiles('_toc.yml') == '' && hashFiles('_toc.yaml') == '' }}
-        run: jupyter-book toc from-project .
-
-      - name: Build the book
-        run: jupyter-book build .
-
-      - name: Add .nojekyll
-        run: touch _build/html/.nojekyll
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+          python-version: '3.11'
+      - run: pip install -U jupyter-book
+      - run: jupyter-book build book
+      - name: Disable Jekyll
+        run: touch book/_build/html/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
         with:
-          path: _build/html
+          path: book/_build/html
 
   deploy:
     needs: build
@@ -54,6 +32,5 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
+      - id: deployment
         uses: actions/deploy-pages@v4
