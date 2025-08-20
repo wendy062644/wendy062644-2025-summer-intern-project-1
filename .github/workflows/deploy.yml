@@ -29,15 +29,18 @@ jobs:
       - name: Install Jupyter Book
         run: |
           python -m pip install -U pip
-          pip install jupyter-book
+          pip install "jupyter-book>=1.0.0"
+
+      # 只有當 _toc.yml / _toc.yaml 都不存在時才自動產生
+      - name: Generate ToC if missing
+        if: ${{ hashFiles('_toc.yml') == '' && hashFiles('_toc.yaml') == '' }}
+        run: jupyter-book toc from-project .
 
       - name: Build the book
-        run: |
-          jupyter-book build .  # 會產出 _build/html
+        run: jupyter-book build .
 
       - name: Add .nojekyll
-        run: |
-          touch _build/html/.nojekyll  # 禁止 GH Pages 套 Jekyll
+        run: touch _build/html/.nojekyll
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
