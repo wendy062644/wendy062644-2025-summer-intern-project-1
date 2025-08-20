@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>360 / 一般相片地圖建置器</title>
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <!-- Leaflet Plugins -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+  <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+  <!-- 360 viewer: Pannellum -->
+  <link rel="stylesheet" href="https://unpkg.com/pannellum@2.5.6/build/pannellum.css" />
+  <script src="https://unpkg.com/pannellum@2.5.6/build/pannellum.js"></script>
+  <!-- EXIF/XMP 解析 -->
+  <script src="https://unpkg.com/exifr@7.1.3/dist/full.umd.js"></script>
+  <!-- KML/GPX to GeoJSON -->
+  <script src="https://unpkg.com/@tmcw/togeojson@5.8.1/dist/togeojson.umd.js"></script>
+  <!-- Zip & Save -->
+  <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+  <!-- Optional HEIC -> JPEG converter -->
+  <script src="https://unpkg.com/heic2any@0.0.4/dist/heic2any.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/libheif-js@1.19.8/libheif-wasm/libheif-bundle.js"></script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+  <button id="toggleSidebar">收合</button>
+  <div id="app">
+    <aside id="sidebar">
+      <header>
+        <h1>相片/地圖編輯器</h1>
+        <span class="badge"><span>狀態</span><strong id="statusText">待上傳</strong></span>
+      </header>
+      <div id="sidebarBody">
+        <div class="section" id="uploadSection">
+          <h2>上傳與匯入</h2>
+          <div class="row">
+            <label class="file" for="fileInput">選擇相片（JPEG/PNG/HEIC）</label>
+            <input id="fileInput" type="file" accept="image/*,.heic,.HEIC" multiple>
+            <button class="btn ghost" id="btnAddUrl">從網址加入</button>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <label class="file" for="trackInput">匯入 GPX/KML/GeoJSON/CSV</label>
+            <input id="trackInput" type="file" accept=".gpx,.kml,.kmz,.geojson,.json,.csv" multiple>
+            <button class="btn ghost" id="btnTimeAlign" title="依時間戳對齊照片與軌跡">時間對齊</button>
+          </div>
+          <div class="row" style="margin-top:8px; display:flex; gap:16px; align-items:center;">
+            <!-- 縮圖邊長 -->
+            <label class="kvs" style="display:flex; flex-direction:row; align-items:center; gap:8px;">
+              <span class="muted">縮圖邊長(px)</span>
+              <input id="thumbSize" type="number" value="512" min="64" max="2048">
+            </label>
+
+            <!-- HEIC 轉檔 -->
+            <label class="kvs" style="display:flex; flex-direction:row; align-items:center; gap:8px;">
+              <span class="muted">啟用 HEIC 轉檔</span>
+              <select id="heicToggle">
+                <option value="on" selected>on</option>
+                <option value="off">off</option>
+              </select>
+            </label>
+          </div>
+          <div class="notice" style="margin-top:6px">支援 EXIF/XMP 解析（GPS/時間/GPano），HEIC 會嘗試轉為 JPEG（可關閉）。</div>
+        </div>
+
+        <div class="section" id="filtersSection">
+          <h2>搜尋 / 篩選</h2>
+          <div class="filters">
+            <input id="qText" placeholder="關鍵字（標題/標籤/作者）">
+            <div class="grid3">
+              <label class="kvs"><span class="muted">是否360</span>
+                <select id="qIs360">
+                  <option value="any">不限</option>
+                  <option value="true">是</option>
+                  <option value="false">否</option>
+                </select>
+              </label>
+              <label class="kvs"><span class="muted">開始日期</span><input id="qStartDate" type="date"></label>
+              <label class="kvs"><span class="muted">結束日期</span><input id="qEndDate" type="date"></label>
+            </div>
+            <div class="row">
+              <button class="btn" id="btnApplyFilter">套用</button>
+              <button class="btn ghost" id="btnClearFilter">清除</button>
+              <button class="btn ghost" id="btnSelectAll">全選</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="section" id="batchSection">
+          <h2>批次操作</h2>
+          <div class="grid2">
+            <label class="kvs"><span class="muted">加上標籤（逗號分隔）</span><input id="batchTags"></label>
+            <label class="kvs"><span class="muted">時間偏移（分鐘 ±）</span><input id="batchShift" type="number"
+                value="0"></label>
+          </div>
+          <div class="row" style="margin-top:6px">
+            <button class="btn" id="btnApplyBatch">套用到已選</button>
+            <button class="btn ghost" id="btnSameLicense">套用相同授權</button>
+            <button class="btn danger" id="btnDeleteSelected">刪除已選</button>
+          </div>
+        </div>
+
+        <div class="section" id="detailSection">
+          <h2>資訊面板（選一張）</h2>
+
+          <div class="kvs form-grid">
+            <!-- 標題 + 標籤 -->
+            <label>
+              標題
+              <input id="dTitle">
+            </label>
+            <label>
+              標籤
+              <input id="dTags" placeholder="以逗號分隔">
+            </label>
+
+            <!-- 描述獨佔 -->
+            <label class="form-full">
+              描述
+              <textarea id="dDesc" rows="2"></textarea>
+            </label>
+
+            <!-- 作者 + 授權 -->
+            <label>
+              作者
+              <input id="dAuthor">
+            </label>
+            <label>
+              授權
+              <input id="dLicense" placeholder="例如 CC BY 4.0">
+            </label>
+
+            <!-- 是否360 + 座標並排 -->
+            <label>
+              座標（lat,lng）
+              <input id="dLatLng" placeholder="24.5961,121.1559">
+            </label>
+            <label>
+              是否360
+              <select id="dIs360">
+                <option value="auto">自動</option>
+                <option value="true">是</option>
+                <option value="false">否</option>
+              </select>
+            </label>
+
+            <!-- 拍攝時間 + 朝向 -->
+            <label>
+              拍攝時間
+              <input id="dTime" type="datetime-local">
+            </label>
+            <label>
+              朝向/方位角
+              <input id="dBearing" type="number" step="0.1" placeholder="0-359">
+            </label>
+
+            <!-- 初始視角獨佔 -->
+            <label class="form-full">
+              初始視角（yaw/pitch）
+              <input id="dYawPitch" placeholder="yaw,pitch">
+            </label>
+          </div>
+
+          <!-- 按鈕列 -->
+          <div class="row" style="margin-top:6px">
+            <button class="btn primary" id="btnSave">儲存</button>
+            <button class="btn ghost" id="btnRevert">還原</button>
+            <button class="btn ghost" id="btnSetCoord">在地圖中設座標</button>
+            <button class="btn danger" id="btnDeleteOne">刪除此張</button>
+          </div>
+        </div>
+
+        <div class="section" id="exportSection">
+          <h2>輸出 / 分享</h2>
+          <div class="grid2">
+            <label class="kvs"><span class="muted">匯出模式</span>
+              <select id="exportMode">
+                <option value="single">單一 HTML</option>
+                <option value="site">靜態網站包（ZIP）</option>
+                <option value="kml">KML（點位+標註）</option>
+                <option value="kmz">KMZ（KML+照片）</option>
+              </select>
+            </label>
+            <label class="kvs"><span class="muted">隱私：座標小數位</span>
+              <select id="coordPrec">
+                <option>7</option>
+                <option selected>5</option>
+                <option>4</option>
+                <option>3</option>
+              </select>
+            </label>
+          </div>
+          <div class="grid2" style="margin-top:6px">
+            <label class="kvs"><span class="muted">移除 EXIF</span><select id="stripExif">
+                <option selected>是（以 Canvas 重新編碼）</option>
+                <option>否</option>
+              </select></label>
+            <label class="kvs"><span class="muted">包含原圖</span><select id="includeFull">
+                <option>否</option>
+                <option selected>是</option>
+              </select></label>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <button class="btn success" id="btnExport">輸出</button>
+            <span class="notice">單檔較大但方便分享；網站包適合 GitHub Pages/Netlify。</span>
+          </div>
+        </div>
+
+        <div id="photoList"></div>
+      </div>
+    </aside>
+
+    <div id="splitter" title="拖曳調整側欄寬度"></div>
+
+    <main id="map"></main>
+  </div>
+  <script src="script.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,33 @@
+title: My book
+author: Leo
+logo: logo.png
+
+only_build_toc_files: true
+execute:
+  execute_notebooks: "off"
+
+latex:
+  latex_documents:
+    targetname: book.tex
+
+bibtex_bibfiles:
+  - references.bib
+
+repository:
+  url: https://github.com/wendy062644/wendy062644-2025-summer-intern-project-1
+  path_to_book: ""
+  branch: main
+
+html:
+  use_issues_button: true
+  use_repository_button: true
+
+launch_buttons:
+  thebe: false
+
+sphinx:
+  config:
+    html_extra_path: ["assets"]
+    html_css_files:
+      - book.css
+    

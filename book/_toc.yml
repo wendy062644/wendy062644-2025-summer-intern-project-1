@@ -1,0 +1,12 @@
+format: jb-book
+root: pages/readme
+
+chapters:
+  - file: pages/intro
+    title: 軟體介紹
+  - file: pages/motivation
+    title: 動機
+  - file: pages/guide
+    title: 操作頁面
+  - file: pages/app
+    title: 線上展示（嵌入 index.html）
