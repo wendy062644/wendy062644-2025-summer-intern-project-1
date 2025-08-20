@@ -19,7 +19,7 @@ title: 操作頁面
   - 預覽地圖與快顯框（預覽圖或 360 Viewer）  
   - 依需求輸出 **單一 HTML / 靜態網站 ZIP / KML / KMZ**
 
-```{admonition} 匯出小抄
+```{admonition} 匯出格式 tips
 :class: tip
 - **單一 HTML**：最方便分享，但檔案大小較大
 - **靜態網站包（ZIP）**：適合 GitHub Pages / Netlify  

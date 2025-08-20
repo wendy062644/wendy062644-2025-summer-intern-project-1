@@ -15,6 +15,6 @@ title: 軟體介紹
 - **匯出分享**：可輸出成 HTML、ZIP、KML、KMZ（KML+照片）...等格式，與他人分享旅遊軌跡
 - **隱私選項**：座標小數點調整、是否移除 EXIF、是否包含原圖
 
-```{admonition} 系統組成（前端 Libraries）
+```{admonition} 系統組成（Libraries）
 :class: note
 Leaflet（地圖）、MarkerCluster（聚合）、Leaflet.Draw（繪製）、Pannellum（360 相片）、exifr（EXIF/XMP）、toGeoJSON（KML/GPX 轉換）、JSZip + FileSaver（打包下載）、libheif/heic2any（HEIC 轉檔）。
