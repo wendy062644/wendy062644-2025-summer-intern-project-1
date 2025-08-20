@@ -1,15 +1,15 @@
 ---
-title: 線上展示（嵌入 index.html）
+title: 成果展示
 ---
 
 # 線上展示
 
 <div style="margin-bottom: 1em;">
   <button onclick="loadLocal()" style="padding:8px 16px; margin-right:8px; border-radius:6px; border:1px solid #ccc; cursor:pointer;">
-    本機
+    本地html(不需網路)
   </button>
   <button onclick="loadOnline()" style="padding:8px 16px; border-radius:6px; border:1px solid #ccc; cursor:pointer;">
-    線上
+    外部連結(github)
   </button>
 </div>
 
