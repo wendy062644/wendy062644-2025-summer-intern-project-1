@@ -19,7 +19,7 @@ title: 成果展示
     src="../sites/index.html"
     width="100%" height="600px"
     style="border:none;"
-    sandbox="allow-scripts allow-same-origin"
+    sandbox="allow-scripts allow-same-origin allow-downloads allow-popups allow-popups-to-escape-sandbox"
   ></iframe>
 </div>
 
