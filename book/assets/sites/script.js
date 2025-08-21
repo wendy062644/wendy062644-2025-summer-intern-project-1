@@ -36,7 +36,7 @@ let map;
         document.body.appendChild(probe);
         const w = probe.getBoundingClientRect().width;
         probe.remove();
-        return w || (sidebar?.offsetWidth || 390);
+        return w || (sidebar?.offsetWidth || 400);
     }
 
     function positionToggleBtn(collapsed) {
@@ -45,7 +45,7 @@ let map;
             toggleBtn.style.left = '10px';
             toggleBtn.style.right = 'auto';
         } else {
-            const left = getSidebarWidthPx() + splitW + 25;
+            const left = getSidebarWidthPx() + splitW + 35;
             toggleBtn.style.left = left + 'px';
             toggleBtn.style.right = 'auto';
         }
@@ -2161,6 +2161,65 @@ let map;
 
     // 初次渲染
     renderPhotoList(); updateStatus();
+    (async function autoLoadKmzFromQuery() {
+        const params = new URLSearchParams(location.search);
+        // 1) base 目錄，預設 ../example/；若不存在會嘗試 ../emample/
+        let base = params.get('kmzbase') || '../example/';
+        async function resolveBase(b) {
+            try {
+                const ping = new URL(b, location.href).href + (b.endsWith('/') ? '' : '/') + '.__ping__';
+                // 不真的去 ping，直接信任相對路徑，瀏覽器 404 也沒關係
+                return b;
+            } catch { return b; }
+        }
+        base = await resolveBase(base);
+
+        // 2) 取得要載入的檔名清單
+        let names = [];
+        if (params.get('kmz')) {
+            names = params.get('kmz').split(/[,\s]+/).filter(Boolean);
+        } else if (params.get('kmzlist')) {
+            try {
+                const listUrl = new URL(params.get('kmzlist'), location.href).href;
+                const list = await (await fetch(listUrl)).json();
+                if (Array.isArray(list)) names = list;
+                else if (Array.isArray(list.kmz)) names = list.kmz;
+            } catch (e) {
+                console.warn('讀取 kmzlist 失敗：', e);
+            }
+        } else if (params.get('demo') === '1') {
+            // demo 模式沒有指定就嘗試預設 sample.kmz
+            names = ['sample.kmz'];
+        }
+
+        // 3) 逐一抓取並丟給既有的 importTrackFile
+        for (const name of names) {
+            // 先用 example，失敗再用 emample 當備援
+            const tryUrls = [
+                new URL(name, new URL(base, location.href)).href,
+                new URL(name, new URL('../emample/', location.href)).href
+            ];
+            let ok = false;
+            for (const url of tryUrls) {
+                try {
+                    const res = await fetch(url);
+                    if (!res.ok) continue;
+                    const blob = await res.blob();
+                    // 強制副檔名與 MIME，避免某些伺服器送 octet-stream
+                    const fname = name.endsWith('.kmz') ? name : (name + '.kmz');
+                    const file = new File([blob], fname, { type: 'application/vnd.google-earth.kmz' });
+                    await importTrackFile(file);     // ← 直接利用你現成的解析流程
+                    ok = true;
+                    break;
+                } catch (e) {
+                    console.warn('載入 KMZ 失敗：', url, e);
+                }
+            }
+            if (!ok) console.warn('找不到 KMZ：', name);
+        }
+
+        if (names.length) { updateStatus(); renderPhotoList(); }
+    })();
 })();
 
 (() => {

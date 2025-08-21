@@ -19,7 +19,7 @@ body {
 
 #app {
   display: grid;
-  grid-template-columns: var(--sidebar-w, 375px) 6px 1fr;
+  grid-template-columns: var(--sidebar-w, 385px) 6px 1fr;
   height: 100vh;
   overflow: hidden;
 }
@@ -96,7 +96,7 @@ body {
 #toggleSidebar {
   position: fixed;
   top: 270px;
-  left: 390px;
+  left: 400px;
   z-index: 1000;
   background: #1a2545;
   color: #e7ecf6;

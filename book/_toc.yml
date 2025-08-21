@@ -10,3 +10,5 @@ chapters:
     title: 操作頁面
   - file: pages/app
     title: 成果展示
+  - file: pages/demo
+    title: 範例展示
