@@ -45,7 +45,7 @@ let map;
             toggleBtn.style.left = '10px';
             toggleBtn.style.right = 'auto';
         } else {
-            const left = getSidebarWidthPx() + splitW + 35;
+            const left = getSidebarWidthPx() + splitW + 25;
             toggleBtn.style.left = left + 'px';
             toggleBtn.style.right = 'auto';
         }
