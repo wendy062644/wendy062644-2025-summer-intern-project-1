@@ -65,20 +65,23 @@ body {
   letter-spacing: .06em
 }
 
-.section[data-collapsed="true"] > :not(h2) {
+.section[data-collapsed="true"]> :not(h2) {
   display: none !important;
 }
 
 .section-toggle {
   appearance: none;
-  background: transparent;   /* 無背景色 */
-  border: none;              /* 無邊框 */
+  background: transparent;
+  /* 無背景色 */
+  border: none;
+  /* 無邊框 */
   cursor: pointer;
   padding: 0 4px;
   font: inherit;
   line-height: 1;
   color: inherit;
 }
+
 .section-toggle:focus {
   outline: 2px solid #6aa9ff;
   outline-offset: 2px;
@@ -198,6 +201,35 @@ label.file {
   overflow: auto;
   flex: 1;
   border-top: 1px solid #1e2847
+}
+
+#photoList .card {
+  grid-template-columns: 56px minmax(0, 1fr) 86px;
+}
+
+#photoList .meta,
+#photoList .meta .flex {
+  min-width: 0;
+}
+
+#photoList .meta .title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#photoList .actions {
+  width: 86px;
+  /* 要配合上面 grid 的第三欄 */
+  flex: 0 0 86px;
+  justify-content: flex-end;
+}
+
+#photoList label.flex {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .card {
@@ -452,7 +484,10 @@ main#map {
   min-width: 0;
 }
 
-#sidebarBody { min-width: 0; overflow-x: hidden; }
+#sidebarBody {
+  min-width: 0;
+  overflow-x: hidden;
+}
 
 /* 若 #app 用的是 grid/flex，都保險處理一下 */
 #app.collapsed main#map {
@@ -462,7 +497,11 @@ main#map {
   grid-column: 1 / -1;
 }
 
-html, body, #app { overflow-x: hidden; }
+html,
+body,
+#app {
+  overflow-x: hidden;
+}
 
 #uploadSection .row {
   display: grid;

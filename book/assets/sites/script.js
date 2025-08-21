@@ -1,4 +1,3 @@
-
 let map;
 (() => {
     /*** —— 全域狀態 —— ***/
@@ -46,7 +45,7 @@ let map;
             toggleBtn.style.left = '10px';
             toggleBtn.style.right = 'auto';
         } else {
-            const left = getSidebarWidthPx() + splitW + 25;
+            const left = getSidebarWidthPx() + splitW + 35;
             toggleBtn.style.left = left + 'px';
             toggleBtn.style.right = 'auto';
         }
@@ -121,17 +120,121 @@ let map;
     });
 
     /*** —— 工具函式 —— ***/
-    function normPath(p = '') {
-        return decodeURIComponent(String(p).replace(/\\/g, '/').replace(/^\.\//, '')).toLowerCase();
+    const VIDEO_EXTS = /\.(mp4|mov|m4v|webm)$/i;
+    const isVideoFile = (f) =>
+        (f?.type || '').startsWith('video/') || VIDEO_EXTS.test(f?.name || '');
+
+    function pickFirstDateIso(cands = []) {
+        for (const s of cands) {
+            if (!s) continue;
+            const d = new Date(s);
+            if (!Number.isNaN(+d)) return d.toISOString();
+        }
+        return null;
     }
+
+    async function parseVideoMetaWithMediaInfo(file) {
+        // 嘗試從 QuickTime / MP4 取時間與 GPS（ISO6709）
+        let lat = null, lng = null, capturedAt = null;
+        try {
+            const mi = await MediaInfo({ format: 'object' });
+            const res = await mi.analyzeData(
+                () => file.size,
+                (chunkSize, offset) => file.slice(offset, offset + chunkSize).arrayBuffer()
+            );
+            const tracks = res?.media?.track || [];
+            const gen = tracks.find(t => t['@type'] === 'General') || {};
+            // 時間（挑一個最像拍攝時間）
+            capturedAt = pickFirstDateIso([
+                gen.Encoded_Date,
+                gen.Tagged_Date,
+                gen.File_Created_Date,
+                gen.File_Modified_Date,
+                gen.Mastered_Date
+            ]);
+
+            // GPS（iPhone：com.apple.quicktime.location.ISO6709，Android 有時放 location）
+            const extra = gen.extra || {};
+            const iso =
+                extra['com.apple.quicktime.location.ISO6709'] ||
+                gen['com.apple.quicktime.location.ISO6709'] ||
+                extra['com.android.location'] ||
+                gen.location;
+
+            if (iso) {
+                // 形式如 "+25.0339+121.5645+020.4/"
+                const m = String(iso).match(/([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)/);
+                if (m) { lat = parseFloat(m[1]); lng = parseFloat(m[2]); }
+            }
+            // 有些 Android 可能是 "lat,lon" 或 "lat lon"
+            if (lat == null && typeof gen.location === 'string') {
+                const m = gen.location.match(/([+-]?\d+(?:\.\d+)?)[,\s]+([+-]?\d+(?:\.\d+)?)/);
+                if (m) { lat = parseFloat(m[1]); lng = parseFloat(m[2]); }
+            }
+        } catch (e) {
+            console.warn('MediaInfo 解析失敗', e);
+        }
+        return { lat, lng, capturedAt };
+    }
+
+    async function grabVideoThumbnail(objUrlOrFile, maxSide = 512) {
+        // 支援直接傳 File 或 blob: URL
+        const url = typeof objUrlOrFile === 'string'
+            ? objUrlOrFile
+            : URL.createObjectURL(objUrlOrFile);
+
+        const v = document.createElement('video');
+        v.preload = 'metadata';
+        v.src = url;
+        v.muted = true;
+
+        await new Promise((res, rej) => {
+            let settle = false;
+            v.addEventListener('loadeddata', () => { if (!settle) { settle = true; res(); } }, { once: true });
+            v.addEventListener('error', () => rej(new Error('讀取影片中繼資料失敗')), { once: true });
+            // 部分瀏覽器需要 seek 一下才會有第一幀
+            v.currentTime = 0.05;
+        });
+
+        const w = v.videoWidth, h = v.videoHeight;
+        const s = Math.min(1, maxSide / Math.max(w, h));
+        const cw = Math.round(w * s), ch = Math.round(h * s);
+        const c = document.createElement('canvas'); c.width = cw; c.height = ch;
+        const ctx = c.getContext('2d'); ctx.drawImage(v, 0, 0, cw, ch);
+        const urlThumb = c.toDataURL('image/jpeg', 0.9);
+
+        // 若我們建立了 blob:，記得釋放
+        if (typeof objUrlOrFile !== 'string') URL.revokeObjectURL(url);
+
+        return { url: urlThumb, width: cw, height: ch, vW: w, vH: h };
+    }
+
+    function blobToDataURL(blob) {
+        return new Promise((resolve, reject) => {
+            const fr = new FileReader();
+            fr.onload = () => resolve(fr.result);
+            fr.onerror = reject;
+            fr.readAsDataURL(blob);
+        });
+    }
+
+    function normPath(p = '') {
+        return decodeURIComponent(String(p)
+            .replace(/\\/g, '/')
+            .replace(/^\.\//, '')
+            .replace(/\/{2,}/g, '/')
+        ).toLowerCase();
+    }
+
     function guessMimeByExt(name = '') {
         const ext = (name.split('.').pop() || '').toLowerCase();
         return ({
             jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
-            webp: 'image/webp', bmp: 'image/bmp', tif: 'image/tiff', tiff: 'image/tiff'
-        })[ext]
-            || 'application/octet-stream';
+            webp: 'image/webp', bmp: 'image/bmp', tif: 'image/tiff', tiff: 'image/tiff',
+            mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm'
+        })[ext] || 'application/octet-stream';
     }
+
     async function extractKmz(file) {
         const ab = await file.arrayBuffer();
         const zip = await JSZip.loadAsync(ab);
@@ -145,21 +248,27 @@ let map;
 
         const fileMap = new Map();
         for (const ent of entries) {
-            if (/\.(jpe?g|png|gif|webp|bmp|tiff?)$/i.test(ent.name)) {
+            // ⬇️ 原本只抓圖片，改成也抓影片
+            if (/\.(jpe?g|png|gif|webp|bmp|tiff?|mp4|mov|m4v|webm)$/i.test(ent.name)) {
                 const base64 = await ent.async('base64');
                 const mime = guessMimeByExt(ent.name);
-                fileMap.set(normPath(ent.name), { name: ent.name, dataUrl: `data:${mime};base64,${base64}` });
+                fileMap.set(normPath(ent.name), {
+                    name: ent.name,
+                    dataUrl: `data:${mime};base64,${base64}`
+                });
             }
         }
         return { kmlText, fileMap };
     }
-    function findKmzImage(href = '', fileMap) {
+
+    function findKmzAsset(href = '', fileMap) {
         const p = normPath(href);
         if (fileMap.has(p)) return fileMap.get(p);
         const justName = p.split('/').pop();
         for (const [k, v] of fileMap.entries()) {
             if (k.endsWith('/' + justName) || k === justName) return v;
         }
+        if (p.startsWith('./') && fileMap.has(p.slice(2))) return fileMap.get(p.slice(2));
         return null;
     }
 
@@ -193,11 +302,13 @@ let map;
 
     async function makeThumbnail(blob, maxSide) {
         const bmp = await imageBitmapFromBlob(blob);
-        const w = bmp.width, h = bmp.height;
-        const scale = (maxSide / Math.max(w, h));
+        const w = bmp.naturalWidth || bmp.width || bmp.videoWidth || 0;
+        const h = bmp.naturalHeight || bmp.height || bmp.videoHeight || 0;
+        if (!w || !h) throw new Error('無法讀取圖片尺寸（可能是不支援的格式，例如 TIFF）');
+
+        const scale = maxSide / Math.max(w, h);
         const tw = Math.round(w * scale), th = Math.round(h * scale);
-        const cvs = document.createElement('canvas');
-        cvs.width = tw; cvs.height = th;
+        const cvs = document.createElement('canvas'); cvs.width = tw; cvs.height = th;
         const ctx = cvs.getContext('2d');
         ctx.drawImage(bmp, 0, 0, tw, th);
         const url = cvs.toDataURL('image/jpeg', 0.85);
@@ -372,22 +483,23 @@ let map;
         return L.divIcon({ html: `<div class="marker-icon ${cls}">${content}</div>`, className: '', iconSize: [34, 34], iconAnchor: [17, 17] });
     }
 
+    function escapeHtml(s = '') { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c])); }
+
     function buildPopupHtml(ph) {
-        const is360 = ph.type === 'photo360';
-        const imgPart = is360 ? `<div id="pnl_${ph.id}" class="popup-360"></div>` : `<img class="popup-img" src="${ph.src}" alt="${ph.title || ph.name}">`;
-        const meta = `<div class="sub">${ph.lat != null ? ('📍 ' + fmt(ph.lat, 5) + ', ' + fmt(ph.lng, 5)) : '無座標'} </div><div class="sub">${ph.capturedAt ? ('🕒 ' + new Date(ph.capturedAt).toLocaleString()) : '時間未知'}</div>`
-        return `<div style="min-width:340px">
-      <div style="display:flex;gap:8px;align-items:flex-start">
-        <img src="${ph.thumbnail}" style="width:64px;height:64px;border-radius:8px;object-fit:cover;border:1px solid #2a3868"/>
-        <div style="flex:1">
-          <div style="font-weight:700">${ph.title || ph.name}</div>
-          ${meta}
-          <div class="notice">${(ph.tags || []).map(t => `#${t}`).join(' ')}</div>
-        </div>
-      </div>
-      <div class="divider"></div>
-      ${imgPart}
-    </div>`;
+        const is360 = ph.type === "photo360";
+        const isVideo = ph.type === "video";
+        const cleanName = (ph.name || "").replace(/[^\w.\-]/g, "_");
+        const assetName = ph.assetName || cleanName;
+        const src = ph.assetName ? ("assets/" + assetName) : ph.src; // ← 關鍵：有打包檔名才走 assets
+        const title = escapeHtml(ph.title || ph.name || "");
+
+        const media = is360
+            ? `<div id="pnl_${ph.id}" style="width:360px;height:220px"></div>`
+            : (isVideo
+                ? `<video src="${src}" controls playsinline style="max-width:320px;max-height:240px;border-radius:8px"></video>`
+                : `<img src="${src}" style="max-width:320px;max-height:240px;border-radius:8px">`);
+
+        return `<div style="min-width:340px"><div style="font-weight:700">${title}</div>${media}</div>`;
     }
 
     function updateStatus() {
@@ -436,7 +548,7 @@ let map;
               <input type="checkbox" ${state.selectedIds.has(ph.id) ? 'checked' : ''} data-sel="${ph.id}"> 勾選
             </label>
           </div>
-          <div class="sub">${ph.lat != null ? ('📍 ' + fmt(ph.lat, 5) + ', ' + fmt(ph.lng, 5)) : '無座標'} ｜ ${(ph.type === 'photo360') ? '360°' : '一般'} ｜ ${ph.width}×${ph.height}</div>
+          <div class="sub">${ph.lat != null ? ('📍 ' + fmt(ph.lat, 5) + ', ' + fmt(ph.lng, 5)) : '無座標'} ｜ ${(ph.type === 'photo360') ? '360°' : (ph.type === 'video') ? '影片' : '一般'} ｜ ${ph.width}×${ph.height}</div>
         </div>
         <div class="actions">
           <button class="icon-btn" data-toggle="${ph.id}" title="${ph.hidden ? '顯示在地圖' : '隱藏於地圖'}">
@@ -553,15 +665,26 @@ let map;
     function deletePhoto(id) {
         const idx = state.photos.findIndex(p => p.id === id);
         if (idx === -1) return;
+
         const existing = state.markers.get(id);
-        if (existing) { state.cluster.removeLayer(existing.marker); if (existing.fov) map.removeLayer(existing.fov); state.markers.delete(id); }
+        if (existing) {
+            state.cluster.removeLayer(existing.marker);
+            if (existing.fov) map.removeLayer(existing.fov);
+            state.markers.delete(id);
+        }
+
+        const removed = state.photos[idx]; // 先存起來
         state.photos.splice(idx, 1);
         state.selectedIds.delete(id);
-        if (state.selectedOne && state.selectedOne.id === id) {
+
+        if (removed?.type === 'video' && typeof removed.src === 'string' && removed.src.startsWith('blob:')) {
+            try { URL.revokeObjectURL(removed.src); } catch { }
+        }
+
+        if (state.selectedOne?.id === id) {
             state.selectedOne = null;
-            ['dTitle', 'dDesc', 'dTags', 'dAuthor', 'dLicense', 'dIs360', 'dLatLng', 'dTime', 'dBearing', 'dYawPitch'].forEach(k => {
-                const e = el(k); if (!e) return; if (e.tagName === 'SELECT') e.value = 'auto'; else e.value = '';
-            });
+            ['dTitle', 'dDesc', 'dTags', 'dAuthor', 'dLicense', 'dIs360', 'dLatLng', 'dTime', 'dBearing', 'dYawPitch']
+                .forEach(k => { const e = el(k); if (!e) return; if (e.tagName === 'SELECT') e.value = 'auto'; else e.value = ''; });
         }
         updateStatus();
     }
@@ -587,7 +710,10 @@ let map;
             return;
         }
 
-        const icon = ph.type === 'photo360' ? divIcon('360°', 'panorama') : divIcon('📷', 'photo');
+        const icon =
+            ph.type === 'photo360' ? divIcon('360°', 'panorama') :
+                ph.type === 'video' ? divIcon('🎬', 'video') :
+                    divIcon('📷', 'photo');
         const marker = L.marker([ph.lat, ph.lng], { icon });
         marker.bindPopup(buildPopupHtml(ph));
         marker.on('popupopen', () => {
@@ -595,12 +721,14 @@ let map;
             if (ph.type === 'photo360') {
                 const elv = document.getElementById('pnl_' + ph.id);
                 if (elv) {
-                    pannellum.viewer(elv, {
-                        type: 'equirectangular', panorama: ph.src, autoLoad: true,
-                        yaw: ph.yaw || 0, pitch: ph.pitch || 0, hfov: 75
-                    });
+                    const viewer = pannellum.viewer(elv, { type: 'equirectangular', panorama: ph.src, autoLoad: true, yaw: ph.yaw || 0, pitch: ph.pitch || 0, hfov: 75 });
+                    const slot = state.markers.get(ph.id); if (slot) slot.viewer = viewer;
                 }
             }
+        });
+        marker.on('popupclose', () => {
+            const slot = state.markers.get(ph.id);
+            if (slot?.viewer) { try { slot.viewer.destroy(); } catch { } slot.viewer = null; }
         });
         state.cluster.addLayer(marker);
 
@@ -622,8 +750,9 @@ let map;
     el('fileInput').addEventListener('change', async (e) => {
         const files = Array.from(e.target.files || []);
         if (!files.length) return;
-        for (const original of files) {
-            await addPhotoFromFile(original);
+        for (const f of files) {
+            if (isVideoFile(f)) await addVideoFromFile(f);
+            else await addPhotoFromFile(f);
         }
         updateStatus(); renderPhotoList();
     });
@@ -665,7 +794,8 @@ let map;
     async function addPhotoFromDataURL(name, dataUrl, { lat = null, lng = null, title = '', description = '', bearing = null, yaw = 0, pitch = 0, capturedAt = null } = {}) {
         const blob = await (await fetch(dataUrl)).blob();
         const bmp = await imageBitmapFromBlob(blob);
-        const w = bmp.width, h = bmp.height;
+        const w = bmp.naturalWidth || bmp.width || 0;
+        const h = bmp.naturalHeight || bmp.height || 0;
         const thumb = await makeThumbnail(blob, parseInt(el('thumbSize').value || '512'));
         const id = 'ph_' + Math.random().toString(36).slice(2, 9);
         const is360 = isPanoramaBySize(w, h); // 2:1 視為 360
@@ -690,55 +820,136 @@ let map;
         upsertMarker(ph);
     }
 
+    async function addVideoFromDataURL(name, dataUrl, {
+        lat = null, lng = null, title = '', description = '', capturedAt = null
+    } = {}) {
+        const blob = await (await fetch(dataUrl)).blob();
+        const fileName = name || 'video.mp4';
+        const mime = blob.type || guessMimeByExt(fileName) || 'video/mp4';
+        const file = new File([blob], fileName, { type: mime });
+
+        // 直接走你現有的縮圖與建物件邏輯，但用我們從 KML 傳入的座標/時間覆蓋
+        const thumb = await grabVideoThumbnail(file, parseInt(el('thumbSize').value || '512'));
+        const ph = {
+            id: uid(),
+            name: file.name,
+            type: 'video',
+            src: URL.createObjectURL(file), // 互動時播 blob:，之後匯出用 srcDataUrl
+            fileObj: file,
+            srcDataUrl: dataUrl,
+            thumbnail: thumb.url,
+            width: thumb.vW,
+            height: thumb.vH,
+            lat, lng,
+            yaw: 0, pitch: 0,
+            bearing: null,
+            capturedAt: capturedAt || new Date().toISOString(),
+            tags: [],
+            title: title || file.name.replace(/\.[^.]+$/, ''),
+            description: description || '',
+            author: '',
+            license: ''
+        };
+        state.photos.push(ph);
+        upsertMarker(ph);
+    }
+
     // 從 KML DOM + KMZ 檔表抓出照片（PhotoOverlay 與 Placemark <description><img ...>）
     async function importPhotosFromKmlDom(dom, fileMap) {
         const getText = (node, sel) => (node.querySelector(sel)?.textContent || '').trim();
+        const IMAGE_EXT_RE = /\.(jpe?g|png|gif|webp|bmp|tiff?)(?:\?.*)?$/i;
 
-        // 1) PhotoOverlay（Google Earth 全景/照片）
-        for (const po of dom.querySelectorAll('PhotoOverlay')) {
+        function readDescriptionHTML(node) {
+            const d = node.querySelector('description');
+            if (!d) return '';
+
+            // 先拿 CDATA 內容（nodeType 4）
+            const cdata = Array.from(d.childNodes).find(n => n.nodeType === 4);
+            if (cdata && cdata.nodeValue) return cdata.nodeValue.trim();
+
+            // 次選：純文字（有些檔會把 HTML 直接當文字放在 description 裡）
+            const txt = (d.textContent || '').trim();
+            if (txt) return txt;
+
+            // 最後：序列化後去掉包裹的 <description ...> ... </description>（namespace-safe）
+            const raw = new XMLSerializer().serializeToString(d);
+            return raw
+                .replace(/^<[^>]*description[^>]*>/i, '')
+                .replace(/<\/[^>]*description>\s*$/i, '')
+                .trim();
+        }
+
+        // 1) PhotoOverlay（也支援 gx:PhotoOverlay）
+        for (const po of dom.querySelectorAll('PhotoOverlay, gx\\:PhotoOverlay')) {
             const name = getText(po, 'name');
             const desc = getText(po, 'description');
             const href = getText(po, 'Icon > href');
             const coords = getText(po, 'Point > coordinates'); // "lng,lat[,alt]"
             if (!href || !coords) continue;
 
-            const img = findKmzImage(href, fileMap);
-            if (!img) continue;
+            const asset = findKmzAsset(href, fileMap);
+            if (!asset) continue;
 
             const [lng, lat] = coords.split(',').map(Number);
             const heading = parseFloat(getText(po, 'Camera > heading'));
             const tilt = parseFloat(getText(po, 'Camera > tilt'));
 
-            await addPhotoFromDataURL(img.name, img.dataUrl, {
-                lat, lng,
-                title: name,
-                description: desc,
-                bearing: Number.isFinite(heading) ? heading : null,
-                yaw: Number.isFinite(heading) ? heading : 0,
-                pitch: Number.isFinite(tilt) ? tilt : 0
-            });
+            if (/^data:video\//.test(asset.dataUrl) || /\.(mp4|mov|m4v|webm)$/i.test(asset.name)) {
+                await addVideoFromDataURL(asset.name, asset.dataUrl, { lat, lng, title: name, description: desc });
+            } else {
+                await addPhotoFromDataURL(asset.name, asset.dataUrl, {
+                    lat, lng,
+                    title: name,
+                    description: desc,
+                    bearing: Number.isFinite(heading) ? heading : null,
+                    yaw: Number.isFinite(heading) ? heading : 0,
+                    pitch: Number.isFinite(tilt) ? tilt : 0
+                });
+            }
         }
 
-        // 2) Placemark（常見是把 <img src="files/xxx.jpg"> 放在 <description>）
+        // 2) Placemark
         for (const pm of dom.querySelectorAll('Placemark')) {
             const coords = getText(pm, 'Point > coordinates');
             if (!coords) continue;
             const [lng, lat] = coords.split(',').map(Number);
             const name = getText(pm, 'name');
             const when = getText(pm, 'TimeStamp > when') || null;
-            const descHtml = getText(pm, 'description');
+            const descHtml = readDescriptionHTML(pm);
             if (!descHtml) continue;
-
-            // 把 description 當 HTML parse，找第一張 <img>
             const doc = new DOMParser().parseFromString(descHtml, 'text/html');
-            const imgTag = doc.querySelector('img');
-            if (!imgTag) continue;
 
-            const href = imgTag.getAttribute('src') || '';
-            const img = findKmzImage(href, fileMap);
+            // 2a) 先找影片（<video> 或 影片連結）
+            const videoEl = doc.querySelector(
+                'video[src], a[href$=".mp4" i], a[href$=".mov" i], a[href$=".m4v" i], a[href$=".webm" i]'
+            );
+            if (videoEl) {
+                const href = videoEl.getAttribute('src') || videoEl.getAttribute('href') || '';
+                const asset = findKmzAsset(href, fileMap);
+                if (asset) {
+                    await addVideoFromDataURL(asset.name, asset.dataUrl, {
+                        lat, lng, title: name,
+                        description: doc.body.textContent?.trim() || '',
+                        capturedAt: when
+                    });
+                    continue;
+                }
+            }
+
+            // 2b) 再找圖片 <img src="...">
+            let imgHref = (doc.querySelector('img[src]')?.getAttribute('src')) || '';
+
+            // 2c) 如果沒有 <img>，找「相片連結」例如 <a href="files/xxx.jpg">
+            if (!imgHref) {
+                const aImg = Array.from(doc.querySelectorAll('a[href]')).find(a => IMAGE_EXT_RE.test(a.getAttribute('href') || ''));
+                if (aImg) imgHref = aImg.getAttribute('href') || '';
+            }
+            if (!imgHref) continue;
+
+            const img = findKmzAsset(imgHref, fileMap);
             if (!img) continue;
 
-            // 試抓 heading（有些會放在 IconStyle/heading 或 ExtendedData）
+            // 可能在樣式或 ExtendedData 裡有方向
             let bearing = null;
             const h1 = parseFloat(getText(pm, 'Style > IconStyle > heading'));
             if (Number.isFinite(h1)) bearing = h1;
@@ -753,10 +964,48 @@ let map;
             await addPhotoFromDataURL(img.name, img.dataUrl, {
                 lat, lng,
                 title: name,
-                description: doc.body.textContent?.trim() || '', // 純文字備註
+                description: doc.body.textContent?.trim() || '',
                 bearing,
                 capturedAt: when
             });
+        }
+    }
+
+    async function addVideoFromFile(file) {
+        try {
+            const objUrl = URL.createObjectURL(file);
+
+            // 先做縮圖＋讀寬高
+            const thumb = await grabVideoThumbnail(file, parseInt(el('thumbSize').value || '512'));
+
+            // 讀 GPS / 拍攝時間
+            const { lat, lng, capturedAt } = await parseVideoMetaWithMediaInfo(file);
+
+            const ph = {
+                id: uid(),
+                name: file.name,
+                type: 'video',            // 關鍵：新型別
+                src: objUrl,              // runtime 播放用的 blob: URL（匯出時再轉）
+                fileObj: file,            // 匯出用，放在 state 內部，不會寫進 payload
+                thumbnail: thumb.url,
+                width: thumb.vW,
+                height: thumb.vH,
+                lat, lng,
+                yaw: 0, pitch: 0,         // 預留欄位，與圖片一致
+                bearing: null,
+                capturedAt: capturedAt || new Date(file.lastModified || Date.now()).toISOString(),
+                tags: [],
+                title: file.name.replace(/\.[^.]+$/, ''),
+                description: '',
+                author: '',
+                license: ''
+            };
+            ph.srcDataUrl = await blobToDataURL(file);
+            state.photos.push(ph);
+            upsertMarker(ph);
+        } catch (err) {
+            console.error('加入影片失敗', err);
+            alert('加入影片失敗：' + (err?.message || err));
         }
     }
 
@@ -828,15 +1077,16 @@ let map;
             state.selectedOne.lng = ph.lng;
         }
 
-        state.setCoordMode = false; el('btnSetCoord').classList.remove('warn');
+        state.setCoordMode = false;
+        el('btnSetCoord').classList.remove('warn');
+        map.getContainer().style.cursor = '';
     });
 
     /*** —— 匯入軌跡/標註 —— ***/
     el('trackInput').addEventListener('change', async (e) => {
         const files = Array.from(e.target.files || []);
-        for (const f of files) { await importTrackFile(f); }
-        updateStatus();
-        renderPhotoList();
+        for (const f of files) await importTrackFile(f);
+        updateStatus(); renderPhotoList();
     });
 
     async function importTrackFile(file) {
@@ -939,7 +1189,18 @@ let map;
 
     el('btnSave').addEventListener('click', saveDetail);
     el('btnRevert').addEventListener('click', revertDetail);
-    el('btnSetCoord').addEventListener('click', () => { state.setCoordMode = !state.setCoordMode; el('btnSetCoord').classList.toggle('warn', state.setCoordMode); });
+    el('btnSetCoord').addEventListener('click', () => {
+        state.setCoordMode = !state.setCoordMode;
+        el('btnSetCoord').classList.toggle('warn', state.setCoordMode);
+        map.getContainer().style.cursor = state.setCoordMode ? 'crosshair' : '';
+    });
+    map.on('keydown', (e) => {
+        if (e.originalEvent.key === 'Escape' && state.setCoordMode) {
+            state.setCoordMode = false;
+            el('btnSetCoord').classList.remove('warn');
+            map.getContainer().style.cursor = '';
+        }
+    });
 
     if (el('btnDeleteSelected')) {
         el('btnDeleteSelected').addEventListener('click', () => {
@@ -1004,21 +1265,48 @@ let map;
         const photos = [];
         for (const p of state.photos) {
             const ph = { ...p };
-            if (ph.lat != null) { ph.lat = +(ph.lat.toFixed(coordPrecision)); ph.lng = +(ph.lng.toFixed(coordPrecision)); }
-            if (stripExif) {
-                if (includeFull) {
-                    ph.src = await reencodeImage(ph.src, 'image/jpeg', 0.92);
+            if (ph.lat != null) {
+                ph.lat = +(ph.lat.toFixed(coordPrecision));
+                ph.lng = +(ph.lng.toFixed(coordPrecision));
+            }
+
+            // --- 修正重點：決定要輸出的 src ---
+            let outSrc = null;
+
+            if (includeFull) {
+                if (ph.type === 'video') {
+                    // 影片：優先用既有的 srcDataUrl，沒有再把 file 轉成 dataURL
+                    if (p.srcDataUrl) {
+                        outSrc = p.srcDataUrl;
+                    } else if (p.fileObj) {
+                        outSrc = await blobToDataURL(p.fileObj);
+                    } else if (typeof p.src === 'string' && p.src.startsWith('blob:')) {
+                        // blob: -> 取回 Blob 再轉 dataURL（有些瀏覽器禁止，盡量避免）
+                        try { outSrc = await blobToDataURL(await (await fetch(p.src)).blob()); } catch { }
+                    }
+                } else {
+                    // 照片：state 內本來就存 dataURL，直接沿用
+                    if (typeof ph.src === 'string' && ph.src.startsWith('data:')) {
+                        outSrc = ph.src;
+                    } else if (typeof p.src === 'string' && p.src.startsWith('data:')) {
+                        outSrc = p.src;
+                    } else if (p.fileObj) {
+                        outSrc = await blobToDataURL(p.fileObj);
+                    }
                 }
             }
+            // -----------------------------------
+
             photos.push({
                 id: ph.id, name: ph.name, type: ph.type,
-                src: includeFull ? ph.src : undefined,
+                src: includeFull ? outSrc : undefined,  // 單檔/內嵌時才帶
                 thumbnail: ph.thumbnail, width: ph.width, height: ph.height,
                 lat: ph.lat, lng: ph.lng, yaw: ph.yaw, pitch: ph.pitch,
                 bearing: ph.bearing, capturedAt: ph.capturedAt, tags: ph.tags,
                 title: ph.title, description: ph.description, license: ph.license, author: ph.author
             });
         }
+
         const drawnGj = state.drawn.toGeoJSON();
         return {
             project: { title: 'My 360 Map', createdAt: new Date().toISOString(), projection: 'EPSG:4326', baseLayers: ['osm', 'satellite'] },
@@ -1054,10 +1342,13 @@ let map;
             '  function divIcon(c){return L.divIcon({html:"<div class=\\"marker-icon\\">"+c+"</div>",className:"",iconSize:[34,34],iconAnchor:[17,17]});}' +
             '  function buildPopupHtml(ph){' +
             '    const is360 = ph.type==="photo360";' +
-            '    var img = is360' +
+            '    const isVideo = ph.type==="video";' +
+            '    var media = is360' +
             '      ? "<div id=\\"pnl_"+ph.id+"\\" style=\\"width:360px;height:220px\\"></div>"' +
-            '      : "<img src=\\""+ph.src+"\\" style=\\"max-width:320px;max-height:240px;border-radius:8px\\">";' +
-            '    return "<div style=\\"min-width:340px\\"><div style=\\"font-weight:700\\">"+(ph.title||ph.name)+"</div>"+img+"</div>";' +
+            '      : (isVideo' +
+            '          ? "<video src=\\""+ph.src+"\\" controls playsinline style=\\"max-width:320px;max-height:240px;border-radius:8px\\"></video>"' +
+            '          : "<img src=\\""+ph.src+"\\" style=\\"max-width:320px;max-height:240px;border-radius:8px\\">");' +
+            '    return "<div style=\\"min-width:340px\\"><div style=\\"font-weight:700\\">"+(ph.title||ph.name)+"</div>"+media+"</div>";' +
             '  }' +
             '  function bearingFOVPolygon(lat,lng,bearingDeg,fov=60,dist=80){const R=6378137;const ang=dist/R;const d2r=x=>x*Math.PI/180,r2d=x=>x*180/Math.PI;const lat1=d2r(lat),lon1=d2r(lng),b=d2r(bearingDeg),h=d2r(fov/2);const pts=[[lat,lng]];for(const a of [b-h,b,b+h]){const lat2=Math.asin(Math.sin(lat1)*Math.cos(ang)+Math.cos(lat1)*Math.sin(ang)*Math.cos(a));const lon2=lon1+Math.atan2(Math.sin(a)*Math.sin(ang)*Math.cos(lat1),Math.cos(ang)-Math.sin(lat1)*Math.sin(lat2));pts.push([r2d(lat2),r2d(lon2)]);}return L.polygon(pts,{color:"#4da3ff",weight:1,fillOpacity:.15,opacity:.8});}' +
             '  for(const ph of PROJECT.photos){' +
@@ -1102,6 +1393,10 @@ let map;
             if (!/\.[^.]+$/.test(base) && fallbackExt) base += fallbackExt;
             return base || ('file' + fallbackExt);
         }
+        function extFromName(n) {
+            const m = String(n || '').match(/\.([a-z0-9]+)$/i);
+            return m ? ('.' + m[1]) : '';
+        }
         const used = new Set();
         const uniq = (name) => {
             let n = name, i = 1;
@@ -1140,13 +1435,14 @@ let map;
         const assetsFolder = zip.folder('assets');
         for (const p of payload.photos || []) {
             if (p.src) {
-                const data = p.src.split(',')[1];
-                const safe = uniq(safeWinName(p.name, '.jpg'));
+                const base64 = p.src.split(',')[1]; // 可能是圖片也可能是影片
+                const ext = extFromName(p.name) || (p.type === 'video' ? '.mp4' : '.jpg');
+                const safe = uniq(safeWinName(p.name, ext));
                 p.assetName = safe;
-                assetsFolder.file(safe, data, { base64: true });
-                delete p.src; // 瘦身 data.json：不再嵌入整張圖
+                assetsFolder.file(safe, base64, { base64: true });
+                delete p.src;      // 瘦身：不要在 data.json 裡再保留 base64
             }
-            if (p.thumbnail) delete p.thumbnail; // site 版不需要縮圖 base64
+            if (p.thumbnail) delete p.thumbnail; // site 版不需要 base64 縮圖
         }
 
         // —— data.json 仍保留（供之後上傳伺服器使用），但 index.html 內會內嵌同內容以支援 file:// —— //
@@ -1173,13 +1469,16 @@ let map;
             '(function(){' +
             '  function divIcon(c){return L.divIcon({html:"<div class=\\"marker-icon\\">"+c+"</div>",className:"",iconSize:[34,34],iconAnchor:[17,17]});}' +
             '  function buildPopupHtml(ph){' +
-            '    const is360=ph.type==="photo360";' +
-            '    const assetName=(ph.assetName||((ph.name||"").replace(/[^\\w.\\-]/g,"_")));' +
-            '    const src="assets/"+assetName;' +
-            '    var img = is360' +
+            '    const is360 = ph.type==="photo360";' +
+            '    const isVideo = ph.type==="video";' +
+            '    const assetName = (ph.assetName || ((ph.name||"").replace(/[^\\w.\\-]/g,"_")));' +
+            '    const src = "assets/" + assetName;' +
+            '    var media = is360' +
             '      ? "<div id=\\"pnl_"+ph.id+"\\" style=\\"width:360px;height:220px\\"></div>"' +
-            '      : "<img src=\\""+src+"\\" style=\\"max-width:320px;max-height:240px;border-radius:8px\\">";' +
-            '    return "<div style=\\"min-width:340px\\"><div style=\\"font-weight:700\\">"+(ph.title||ph.name)+"</div>"+img+"</div>";' +
+            '      : (isVideo' +
+            '          ? "<video src=\\""+src+"\\" controls playsinline style=\\"max-width:320px;max-height:240px;border-radius:8px\\"></video>"' +
+            '          : "<img src=\\""+src+"\\" style=\\"max-width:320px;max-height:240px;border-radius:8px\\">");' +
+            '    return "<div style=\\"min-width:340px\\"><div style=\\"font-weight:700\\">"+(ph.title||ph.name)+"</div>"+media+"</div>";' +
             '  }' +
             '  function bearingFOVPolygon(lat,lng,bearingDeg,fov=60,dist=80){const R=6378137;const ang=dist/R;const d2r=x=>x*Math.PI/180,r2d=x=>x*180/Math.PI;const lat1=d2r(lat),lon1=d2r(lng),b=d2r(bearingDeg),h=d2r(fov/2);const pts=[[lat,lng]];for(const a of [b-h,b,b+h]){const lat2=Math.asin(Math.sin(lat1)*Math.cos(ang)+Math.cos(lat1)*Math.sin(ang)*Math.cos(a));const lon2=lon1+Math.atan2(Math.sin(a)*Math.sin(ang)*Math.cos(lat1),Math.cos(ang)-Math.sin(lat1)*Math.sin(lat2));pts.push([r2d(lat2),r2d(lon2)]);}return L.polygon(pts,{color:"#4da3ff",weight:1,fillOpacity:.15,opacity:.8});}' +
             '  function init(PROJECT){' +
@@ -1409,18 +1708,14 @@ let map;
         const photos = (payload.photos || []).map(p => ({ ...p })); // 複製避免汙染原物件
 
         for (const p of photos) {
-            if (!p.src) continue; // 沒圖就跳過
-            const extGuess = /\.png$/i.test(p.name) ? '.png' : '.jpg';
-            const safe = uniq(safeWinName(p.name || p.id || 'image', extGuess));
-            p.assetName = safe;
-
-            // 從 dataURL 取出 base64 並寫入 KMZ
+            if (!p.src) continue;
             const base64 = p.src.split(',')[1] || '';
+            const ext = (p.name && p.name.match(/\.[a-z0-9]+$/i)) ? p.name.match(/\.[a-z0-9]+$/i)[0] :
+                (p.type === 'video' ? '.mp4' : '.jpg');
+            const safe = uniq(safeWinName(p.name || p.id || 'asset', ext));
+            p.assetName = safe;
             filesFolder.file(safe, base64, { base64: true });
-
-            // KMZ 裡不需要再存 dataURL/縮圖，瘦身
-            delete p.src;
-            if (p.thumbnail) delete p.thumbnail;
+            delete p.src; if (p.thumbnail) delete p.thumbnail;
         }
 
         // —— 產生 KML（引用相對路徑 files/<assetName>） —— //
@@ -1448,17 +1743,27 @@ let map;
             .map(ph => {
                 const is360 = (ph.type === 'photo360');
                 const when = ph.capturedAt ? `<TimeStamp><when>${esc(ph.capturedAt)}</when></TimeStamp>` : '';
+                const isVideo = (ph.type === 'video') ||
+                    /\.(mp4|mov|m4v|webm)$/i.test(ph.assetName || ph.name || '');
+
                 const imgHref = ph.assetName ? `files/${esc(ph.assetName)}` : null;
+                const mediaHtml = imgHref
+                    ? (isVideo
+                        // 許多 Google Earth 氣球不支援 HTML5 <video> 播放，至少提供下載/開啟連結
+                        ? `<div style="margin:6px 0">
+           <a href="${imgHref}">▶ 開啟/下載影片</a>
+         </div>`
+                        : `<div><img src="${imgHref}" style="max-width:380px;max-height:280px;"/></div>`)
+                    : '';
 
                 const desc = `
-        <div><b>${esc(ph.title || ph.name || (is360 ? '360 Photo' : 'Photo'))}</b></div>
-        ${ph.description ? `<div>${esc(ph.description)}</div>` : ''}
-        ${imgHref ? `<div><img src="${imgHref}" style="max-width:380px;max-height:280px;"/></div>` : ''}
-        ${(ph.tags && ph.tags.length) ? `<div>#${ph.tags.map(esc).join(' #')}</div>` : ''}
-        ${ph.author ? `<div>作者：${esc(ph.author)}</div>` : ''}
-        ${ph.license ? `<div>授權：${esc(ph.license)}</div>` : ''}
-        ${is360 ? `<div>（360°：KML 僅地標/PhotoOverlay 呈現，無網頁檢視器）</div>` : ''}
-      `.replace(/\s+/g, ' ').trim();
+  <div><b>${esc(ph.title || ph.name || (isVideo ? 'Video' : 'Photo'))}</b></div>
+  ${ph.description ? `<div>${esc(ph.description)}</div>` : ''}
+  ${mediaHtml}
+  ${(ph.tags && ph.tags.length) ? `<div>#${ph.tags.map(esc).join(' #')}</div>` : ''}
+  ${ph.author ? `<div>作者：${esc(ph.author)}</div>` : ''}
+  ${ph.license ? `<div>授權：${esc(ph.license)}</div>` : ''}
+`.replace(/\s+/g, ' ').trim();
 
                 const ext = [
                     ['id', ph.id], ['type', ph.type], ['bearing', ph.bearing],
@@ -1578,83 +1883,83 @@ let map;
 })();
 
 (() => {
-  const SECTION_IDS = [
-    'uploadSection',  // 上傳與匯入
-    'filtersSection', // 搜尋 / 篩選
-    'batchSection',   // 批次操作
-    'detailSection',  // 資訊面板（選一張）
-    'exportSection'   // 輸出 / 分享
-  ];
-  const PREF_KEY = 'photoapp.sectionCollapsed';
+    const SECTION_IDS = [
+        'uploadSection',  // 上傳與匯入
+        'filtersSection', // 搜尋 / 篩選
+        'batchSection',   // 批次操作
+        'detailSection',  // 資訊面板（選一張）
+        'exportSection'   // 輸出 / 分享
+    ];
+    const PREF_KEY = 'photoapp.sectionCollapsed';
 
-  // 讀取偏好
-  let prefs = {};
-  try { prefs = JSON.parse(localStorage.getItem(PREF_KEY) || '{}'); }
-  catch { prefs = {}; }
+    // 讀取偏好
+    let prefs = {};
+    try { prefs = JSON.parse(localStorage.getItem(PREF_KEY) || '{}'); }
+    catch { prefs = {}; }
 
-  const savePrefs = () =>
-    localStorage.setItem(PREF_KEY, JSON.stringify(prefs));
+    const savePrefs = () =>
+        localStorage.setItem(PREF_KEY, JSON.stringify(prefs));
 
-  // 依展開/收起狀態更新箭頭
-  function setCollapsed(sectionEl, collapsed, id, btn) {
-    if (collapsed) {
-      sectionEl.setAttribute('data-collapsed', 'true');
-      if (btn) btn.textContent = '▶';       // 收起時：向右箭頭
-      if (btn) btn.setAttribute('aria-expanded', 'false');
-      prefs[id] = true;
-    } else {
-      sectionEl.removeAttribute('data-collapsed');
-      if (btn) btn.textContent = '▼';       // 展開時：向下箭頭
-      if (btn) btn.setAttribute('aria-expanded', 'true');
-      prefs[id] = false;
+    // 依展開/收起狀態更新箭頭
+    function setCollapsed(sectionEl, collapsed, id, btn) {
+        if (collapsed) {
+            sectionEl.setAttribute('data-collapsed', 'true');
+            if (btn) btn.textContent = '▶';       // 收起時：向右箭頭
+            if (btn) btn.setAttribute('aria-expanded', 'false');
+            prefs[id] = true;
+        } else {
+            sectionEl.removeAttribute('data-collapsed');
+            if (btn) btn.textContent = '▼';       // 展開時：向下箭頭
+            if (btn) btn.setAttribute('aria-expanded', 'true');
+            prefs[id] = false;
+        }
+        savePrefs();
     }
-    savePrefs();
-  }
 
-  SECTION_IDS.forEach((id) => {
-    const sectionEl = document.getElementById(id);
-    if (!sectionEl) return;
+    SECTION_IDS.forEach((id) => {
+        const sectionEl = document.getElementById(id);
+        if (!sectionEl) return;
 
-    const header = sectionEl.querySelector('h2');
-    if (!header) return;
+        const header = sectionEl.querySelector('h2');
+        if (!header) return;
 
-    // 右側箭頭按鈕（無背景）
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'section-toggle';
-    btn.setAttribute('aria-label', '切換收合');
-    btn.textContent = '▼'; // 預設先視為展開
-    btn.setAttribute('aria-expanded', 'true');
-    header.appendChild(btn);
+        // 右側箭頭按鈕（無背景）
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'section-toggle';
+        btn.setAttribute('aria-label', '切換收合');
+        btn.textContent = '▼'; // 預設先視為展開
+        btn.setAttribute('aria-expanded', 'true');
+        header.appendChild(btn);
 
-    // 初始化（若有記錄，套用）
-    const initialCollapsed = !!prefs[id];
-    setCollapsed(sectionEl, initialCollapsed, id, btn);
+        // 初始化（若有記錄，套用）
+        const initialCollapsed = !!prefs[id];
+        setCollapsed(sectionEl, initialCollapsed, id, btn);
 
-    const toggle = () => {
-      const isCollapsed = sectionEl.getAttribute('data-collapsed') === 'true';
-      setCollapsed(sectionEl, !isCollapsed, id, btn);
-    };
+        const toggle = () => {
+            const isCollapsed = sectionEl.getAttribute('data-collapsed') === 'true';
+            setCollapsed(sectionEl, !isCollapsed, id, btn);
+        };
 
-    // 點整個 h2 可收合（避免按鈕被點時觸發兩次）
-    header.addEventListener('click', (e) => {
-      if (e.target === btn) return; // 交給按鈕自己的 handler
-      toggle();
+        // 點整個 h2 可收合（避免按鈕被點時觸發兩次）
+        header.addEventListener('click', (e) => {
+            if (e.target === btn) return; // 交給按鈕自己的 handler
+            toggle();
+        });
+
+        // 點箭頭按鈕也可收合
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggle();
+        });
+
+        // 鍵盤可用：h2 可聚焦，Enter/Space 觸發
+        header.tabIndex = 0;
+        header.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggle();
+            }
+        });
     });
-
-    // 點箭頭按鈕也可收合
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      toggle();
-    });
-
-    // 鍵盤可用：h2 可聚焦，Enter/Space 觸發
-    header.tabIndex = 0;
-    header.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        toggle();
-      }
-    });
-  });
 })();

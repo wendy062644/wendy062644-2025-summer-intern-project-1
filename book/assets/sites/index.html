@@ -29,6 +29,7 @@
   <!-- Optional HEIC -> JPEG converter -->
   <script src="https://unpkg.com/heic2any@0.0.4/dist/heic2any.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/libheif-js@1.19.8/libheif-wasm/libheif-bundle.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mediainfo.js/dist/mediainfo.min.js"></script>
   <link rel="stylesheet" href="styles.css">
 </head>
 
@@ -44,8 +45,8 @@
         <div class="section" id="uploadSection">
           <h2>上傳與匯入</h2>
           <div class="row">
-            <label class="file" for="fileInput">選擇相片（JPEG/PNG/HEIC）</label>
-            <input id="fileInput" type="file" accept="image/*,.heic,.HEIC" multiple>
+            <label class="file" for="fileInput">選擇相片/影片（JPG/PNG/MP4）</label>
+            <input id="fileInput" type="file" accept="image/*,video/*,.heic,.HEIC,.mp4,.MP4,.mov,.MOV,.m4v,.M4V,.webm" multiple>
             <button class="btn ghost" id="btnAddUrl">從網址加入</button>
           </div>
           <div class="row" style="margin-top:8px">
