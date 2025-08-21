@@ -1142,6 +1142,263 @@ let map;
         return { type: 'FeatureCollection', features: feats };
     }
 
+    async function buildGeoJSONZip(payload) {
+        const zip = new JSZip();
+
+        // —— Windows 安全檔名 & 去重，沿用 site/KMZ 的習慣 —— //
+        function safeWinName(raw = 'asset', fallbackExt = '') {
+            let base = (raw || 'asset').split(/[\\/]/).pop();
+            base = base.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+                .replace(/\s+$/g, '')
+                .replace(/\.+$/g, '');
+            if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$/i.test(base)) base = '_' + base;
+            if (!/\.[^.]+$/.test(base) && fallbackExt) base += fallbackExt;
+            if (base.length > 180) {
+                const m = base.match(/^(.*?)(\.[^.]+)?$/);
+                const stem = (m && m[1]) || 'asset';
+                const ext = (m && m[2]) || fallbackExt;
+                base = stem.slice(0, 180 - ext.length) + ext;
+            }
+            return base || ('asset' + fallbackExt);
+        }
+        function extFromName(n) {
+            const m = String(n || '').match(/\.([a-z0-9]+)$/i);
+            return m ? ('.' + m[1]) : '';
+        }
+        const used = new Set();
+        const uniq = (name) => {
+            let n = name, i = 1;
+            while (used.has(n.toLowerCase())) {
+                const m = n.match(/^(.*?)(\.[^.]+)?$/);
+                n = `${m[1]}_${i}${m[2] || ''}`; i++;
+            }
+            used.add(n.toLowerCase());
+            return n;
+        };
+
+        // —— 寫入 assets/ 並組 GeoJSON —— //
+        const assetsFolder = zip.folder('assets');
+        const features = [];
+
+        for (const p of (payload.photos || [])) {
+            // 只輸出有座標的（GeoJSON Point）
+            if (!(p.lat != null && p.lng != null)) continue;
+
+            // 把 dataURL 變成實體檔案存到 assets/，並在 properties 用相對路徑引用
+            let rel = null;
+            if (p.src) {
+                const base64 = p.src.split(',')[1] || '';
+                const ext = extFromName(p.name) || (p.type === 'video' ? '.mp4' : '.jpg');
+                const safe = uniq(safeWinName(p.name || p.id || 'asset', ext));
+                assetsFolder.file(safe, base64, { base64: true });
+                rel = `assets/${safe}`;
+            }
+
+            features.push({
+                type: 'Feature',
+                properties: {
+                    id: p.id,
+                    name: p.name,
+                    title: p.title,
+                    description: p.description,
+                    type: p.type,             // 'photo' | 'photo360' | 'video'
+                    width: p.width,
+                    height: p.height,
+                    yaw: p.yaw,
+                    pitch: p.pitch,
+                    bearing: p.bearing,
+                    capturedAt: p.capturedAt,
+                    tags: p.tags || [],
+                    author: p.author,
+                    license: p.license,
+                    src: rel                  // ← 相對路徑（assets/xxx）
+                },
+                geometry: {
+                    type: 'Point',
+                    coordinates: [p.lng, p.lat]   // [lon, lat]
+                }
+            });
+        }
+
+        const photosFC = { type: 'FeatureCollection', features };
+        zip.file('photos.geojson', JSON.stringify(photosFC, null, 2));
+
+        // 標註（你畫在地圖上的圖層）也一併輸出
+        if (payload.annotations && Array.isArray(payload.annotations.features) && payload.annotations.features.length) {
+            // 直接用你現有的 GeoJSON，不動它
+            zip.file('annotations.geojson', JSON.stringify(payload.annotations, null, 2));
+        }
+
+        // 產出 ZIP Blob
+        return await zip.generateAsync({ type: 'blob' });
+    }
+
+    async function buildCSVZip(payload) {
+        const zip = new JSZip();
+
+        // —— Windows 安全檔名 & 去重 —— //
+        function safeWinName(raw = 'asset', fallbackExt = '') {
+            let base = (raw || 'asset').split(/[\\/]/).pop();
+            base = base.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+                .replace(/\s+$/g, '')
+                .replace(/\.+$/g, '');
+            if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$/i.test(base)) base = '_' + base;
+            if (!/\.[^.]+$/.test(base) && fallbackExt) base += fallbackExt;
+            if (base.length > 180) {
+                const m = base.match(/^(.*?)(\.[^.]+)?$/);
+                const stem = (m && m[1]) || 'asset';
+                const ext = (m && m[2]) || fallbackExt;
+                base = stem.slice(0, 180 - ext.length) + ext;
+            }
+            return base || ('asset' + fallbackExt);
+        }
+        function extFromName(n) {
+            const m = String(n || '').match(/\.([a-z0-9]+)$/i);
+            return m ? ('.' + m[1]) : '';
+        }
+        const used = new Set();
+        const uniq = (name) => {
+            let n = name, i = 1;
+            while (used.has(n.toLowerCase())) {
+                const m = n.match(/^(.*?)(\.[^.]+)?$/);
+                n = `${m[1]}_${i}${m[2] || ''}`; i++;
+            }
+            used.add(n.toLowerCase());
+            return n;
+        };
+
+        // —— 工具：CSV 編碼（Excel 友善，含 BOM） —— //
+        const SEP = ',';                      // 欄位分隔
+        const NL = '\r\n';                   // Windows/Excel 友善換行
+        const BOM = '\ufeff';                 // Excel 直接開啟避免亂碼
+        const q = (v) => {
+            // 轉字串 + 轉義雙引號 + 若含逗號/換行/雙引號就用引號包起來
+            if (v === null || v === undefined) return '';
+            const s = String(v);
+            if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+            return s;
+        };
+        const num = (v) => (typeof v === 'number' && Number.isFinite(v)) ? String(v) : (v ?? '');
+
+        // —— 1) assets/：把照片/影片（dataURL）落地成檔案 —— //
+        const assetsFolder = zip.folder('assets');
+
+        // —— 2) photos.csv —— //
+        const photoHeader = [
+            'id', 'name', 'title', 'description', 'type',
+            'width', 'height', 'lat', 'lng', 'yaw', 'pitch', 'bearing',
+            'capturedAt', 'tags', 'author', 'license', 'src'
+        ];
+        const photoRows = [photoHeader.join(SEP)];
+
+        for (const p of (payload.photos || [])) {
+            // 只輸出有座標的
+            if (!(p.lat != null && p.lng != null)) continue;
+
+            // 寫出媒體
+            let rel = '';
+            if (p.src) {
+                const base64 = p.src.split(',')[1] || '';
+                const ext = extFromName(p.name) || (p.type === 'video' ? '.mp4' : '.jpg');
+                const safe = uniq(safeWinName(p.name || p.id || 'asset', ext));
+                assetsFolder.file(safe, base64, { base64: true });
+                rel = `assets/${safe}`;
+            }
+
+            // tags 用 | 串接，避免與 CSV 逗號衝突
+            const tagsJoined = Array.isArray(p.tags) ? p.tags.join('|') : '';
+
+            const row = [
+                q(p.id),
+                q(p.name),
+                q(p.title),
+                q(p.description),
+                q(p.type),
+                num(p.width),
+                num(p.height),
+                num(p.lat),
+                num(p.lng),
+                num(p.yaw),
+                num(p.pitch),
+                num(p.bearing),
+                q(p.capturedAt || ''),
+                q(tagsJoined),
+                q(p.author || ''),
+                q(p.license || ''),
+                q(rel)
+            ].join(SEP);
+            photoRows.push(row);
+        }
+
+        const photosCSV = BOM + photoRows.join(NL) + NL;
+        zip.file('photos.csv', photosCSV);
+
+        // —— 3) annotations.csv（把 GeoJSON 標註轉成 WKT 方便匯入 GIS/Excel） —— //
+        function coordFmt(c) {
+            // c: [lng, lat, alt?] -> "lng lat"（WKT 用空白分隔）
+            const lng = (typeof c[0] === 'number') ? c[0] : Number(c[0]);
+            const lat = (typeof c[1] === 'number') ? c[1] : Number(c[1]);
+            return `${lng} ${lat}`;
+        }
+        function ringToWkt(ring) {
+            return '(' + ring.map(coordFmt).join(',') + ')';
+        }
+        function geomToWkt(g) {
+            if (!g || !g.type) return '';
+            switch (g.type) {
+                case 'Point':
+                    return `POINT(${coordFmt(g.coordinates)})`;
+                case 'LineString':
+                    return `LINESTRING(${g.coordinates.map(coordFmt).join(',')})`;
+                case 'Polygon':
+                    // [ outer, hole1, hole2, ... ]
+                    return `POLYGON(${g.coordinates.map(r => ringToWkt(r)).join(',')
+                        })`;
+                case 'MultiLineString':
+                    return `MULTILINESTRING(${g.coordinates.map(ls => '(' + ls.map(coordFmt).join(',') + ')').join(',')
+                        })`;
+                case 'MultiPolygon':
+                    return `MULTIPOLYGON(${g.coordinates.map(poly => '(' + poly.map(r => ringToWkt(r)).join(',') + ')').join(',')
+                        })`;
+                default:
+                    // 其他型別可依需求擴充
+                    return '';
+            }
+        }
+
+        if (payload.annotations && Array.isArray(payload.annotations.features) && payload.annotations.features.length) {
+            const annoHeader = [
+                'id', 'name', 'type',
+                'style_color', 'style_weight', 'style_fillColor', 'style_fillOpacity',
+                'geometry_wkt'
+            ];
+            const annoRows = [annoHeader.join(SEP)];
+            const feats = payload.annotations.features;
+
+            feats.forEach((f, i) => {
+                const name = (f.properties && f.properties.name) || `Feature ${i + 1}`;
+                const s = (f.properties && f.properties.style) || {};
+                const row = [
+                    q(String(i + 1)),
+                    q(name),
+                    q(f.geometry ? f.geometry.type : ''),
+                    q(s.color || ''),
+                    num(s.weight),
+                    q(s.fillColor || ''),
+                    num(s.fillOpacity),
+                    q(geomToWkt(f.geometry))
+                ].join(SEP);
+                annoRows.push(row);
+            });
+
+            const annoCSV = BOM + annoRows.join(NL) + NL;
+            zip.file('annotations.csv', annoCSV);
+        }
+
+        // —— 4) 輸出 ZIP Blob —— //
+        return await zip.generateAsync({ type: 'blob' });
+    }
+
     // 依時間戳對齊照片與軌跡（最近點）
     el('btnTimeAlign').addEventListener('click', () => {
         const tracks = state.tracks.flatMap(gj => gj.features || []);
@@ -1252,6 +1509,30 @@ let map;
             const html = await buildSingleHTML(payload);
             const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
             saveAs(blob, `photo-map-${Date.now()}.html`);
+            return;
+        }
+
+        if (mode === 'geojson') {
+            // GeoJSON 需要把原圖打包到 assets/，所以強制 includeFull: true
+            const payload = await buildProjectJSON({
+                coordPrecision: prec,
+                includeFull: true,
+                stripExif: strip
+            });
+            const blob = await buildGeoJSONZip(payload);
+            saveAs(blob, `photo-geojson-${Date.now()}.zip`);
+            return;
+        }
+
+        if (mode === 'csvzip') {
+            // 需要把原圖/影片打包到 assets/，因此強制 includeFull: true
+            const payload = await buildProjectJSON({
+                coordPrecision: prec,
+                includeFull: true,
+                stripExif: strip
+            });
+            const blob = await buildCSVZip(payload);
+            saveAs(blob, `photo-csv-${Date.now()}.zip`);
             return;
         }
 

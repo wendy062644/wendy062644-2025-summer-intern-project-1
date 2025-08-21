@@ -2,7 +2,7 @@
 title: 成果展示
 ---
 
-# 線上展示
+# 成果展示
 
 <div style="margin-bottom: 1em;">
   <button onclick="loadLocal()" style="padding:8px 16px; margin-right:8px; border-radius:6px; border:1px solid #ccc; cursor:pointer;">
