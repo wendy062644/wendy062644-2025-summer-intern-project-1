@@ -7,7 +7,7 @@ title: 範例展示
 <div class="embed-wrap">
   <iframe
     id="demoFrame"
-    src="../sites/index.html?kmzbase=../example/&kmz=example.kmz"
+    src="../example/index.html?kmzbase=../example/&kmz=example.kmz"
     width="100%" height="600px"
     style="border:none;"
     sandbox="allow-scripts allow-same-origin allow-downloads allow-popups allow-popups-to-escape-sandbox"
