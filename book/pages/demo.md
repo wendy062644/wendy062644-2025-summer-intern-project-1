@@ -3,8 +3,6 @@ title: 範例展示
 ---
 
 # 範例展示
-<script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
-<script src="https://unpkg.com/@tmcw/togeojson@5.8.1/dist/togeojson.umd.js"></script>
 <div class="embed-wrap">
   <iframe
     id="demoFrame"
