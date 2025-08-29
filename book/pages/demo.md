@@ -4,32 +4,20 @@ title: 範例展示
 
 # 範例展示
 
-<!DOCTYPE html>
-<html lang="zh-Hant">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>相片地圖（無側欄）</title>
-  <!-- Leaflet -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <!-- MarkerCluster -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
-  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-  <!-- 360 viewer -->
-  <link rel="stylesheet" href="https://unpkg.com/pannellum@2.5.6/build/pannellum.css" />
-  <script src="https://unpkg.com/pannellum@2.5.6/build/pannellum.js"></script>
-  <!-- Zip -->
-  <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
-  <!-- KML -> GeoJSON -->
-  <script src="https://unpkg.com/@tmcw/togeojson@5.8.1/dist/togeojson.umd.js"></script>
+<div class="embed-wrap">
+  <iframe
+    id="demoFrame"
+    src="../example/index.html?kmzbase=../example/&kmz=example.kmz"
+    width="100%" height="600px"
+    style="border:none;"
+    sandbox="allow-scripts allow-same-origin allow-downloads allow-popups allow-popups-to-escape-sandbox"
+  ></iframe>
+</div>
 
-  <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-  <div id="map"></div>
-  <script src="script.js"></script>
-</body>
-</html>
-
+<style>
+.bd-sidebar-secondary { display: none !important; }
+.bd-content, .bd-article-container, .tex2jax_ignore.mathjax_ignore {
+  max-width: 100% !important; width: 100% !important;
+}
+.embed-wrap { width: 100%; }
+</style>
