@@ -30,7 +30,7 @@ launch_buttons:
 
 sphinx:
   config:
-    copyright: "© 2025 Yu-Lin Chen"
+    copyright: "2025 Yu-Lin Chen"
     html_extra_path: ["assets"]
     html_css_files:
       - book.css
