@@ -5,8 +5,10 @@
     maxZoom: 19, attribution: '&copy; OpenStreetMap'
   }).addTo(map);
 
-  const cluster = L.markerClusterGroup();
+  const cluster = L.markerClusterGroup(); // 相片/影片點位
   map.addLayer(cluster);
+
+  let annoLayer = null; // 內建點線面圖層（由 KML 轉 GeoJSON）
 
   // 內部狀態（最小）
   const state = {
@@ -40,7 +42,6 @@
     const old = state.markers.get(ph.id);
     if (old){
       cluster.removeLayer(old.marker);
-      // 關掉 pannellum
       if (old.viewer){ try{ old.viewer.destroy(); }catch{} }
     }
     if (ph.lat==null || ph.lng==null) { state.markers.delete(ph.id); return; }
@@ -97,7 +98,7 @@
       name: name || 'video.mp4',
       type: 'video',
       src: dataUrl,
-      width: 0, height: 0,  // 不特別量測
+      width: 0, height: 0,
       lat, lng, yaw:0, pitch:0,
       title: title || (name ? name.replace(/\.[^.]+$/, '') : 'Video')
     };
@@ -131,8 +132,14 @@
 
     // 解析 KML DOM
     const dom = new DOMParser().parseFromString(kmlText, 'text/xml');
+
+    // 1) 匯入相片/影片（PhotoOverlay 與 Placemark 含圖）
     await importPhotosFromKmlDom(dom, fileMap);
-    fitToAllMarkers();
+
+    // 2) 顯示 KML 的一般點線面（Leaflet 內建圖層）
+    drawKmlGeometries(dom);
+
+    fitToAll();
   }
 
   async function loadKmzFromUrl(url){
@@ -167,7 +174,6 @@
     // 1) PhotoOverlay（含 gx:PhotoOverlay）
     for (const po of dom.querySelectorAll('PhotoOverlay, gx\\:PhotoOverlay')){
       const name = getText(po,'name');
-      const desc = getText(po,'description'); // 可不使用
       const href = getText(po,'Icon > href');
       const coords = getText(po,'Point > coordinates'); // "lng,lat[,alt]"
       if (!href || !coords) continue;
@@ -233,10 +239,70 @@
     }
   }
 
-  function fitToAllMarkers(){
-    if (!state.markers.size) return;
-    const bounds = cluster.getBounds();
-    if (bounds.isValid()) map.fitBounds(bounds.pad(0.2));
+  // ====== 顯示 KML 的點線面（Leaflet 內建圖層） ======
+  function drawKmlGeometries(dom){
+    try{
+      const gj = toGeoJSON.kml(dom);
+
+      // 建立一個「已經用相片顯示」的座標集合，用來避免重複把相片點又畫成普通點
+      const key = (lat,lng)=> `${lat.toFixed(6)},${lng.toFixed(6)}`;
+      const photoSet = new Set(
+        state.photos
+          .filter(p => p.lat!=null && p.lng!=null)
+          .map(p => key(p.lat, p.lng))
+      );
+
+      if (annoLayer) { map.removeLayer(annoLayer); annoLayer = null; }
+
+      annoLayer = L.geoJSON(gj, {
+        style: (feat) => ({
+          color: '#4da3ff',
+          weight: 2,
+          fillColor: '#4da3ff',
+          fillOpacity: 0.15,
+          opacity: 0.9
+        }),
+        pointToLayer: (feat, latlng) => L.marker(latlng),
+        filter: (feat) => {
+          if (!feat.geometry) return false;
+          // 避免將已以相片方式呈現的點再畫一次
+          if (feat.geometry.type === 'Point'){
+            const c = feat.geometry.coordinates;
+            if (Array.isArray(c) && c.length >= 2){
+              const k = key(c[1], c[0]);
+              if (photoSet.has(k)) return false;
+            }
+          }
+          return true;
+        },
+        onEachFeature: (feat, layer) => {
+          const name = feat.properties && (feat.properties.name || feat.properties.title);
+          if (name) layer.bindPopup('<b>'+escapeHtml(name)+'</b>');
+        }
+      }).addTo(map);
+    } catch (e){
+      console.warn('KML->GeoJSON 失敗', e);
+    }
+  }
+
+  // ====== 視野套到所有圖徵 ======
+  function fitToAll(){
+    let bounds = null;
+
+    // 相片群聚的範圍
+    if (state.markers.size){
+      const b = cluster.getBounds();
+      if (b && b.isValid()) bounds = b;
+    }
+    // KML 內建點線面範圍
+    if (annoLayer && annoLayer.getBounds){
+      const b2 = annoLayer.getBounds();
+      if (b2 && b2.isValid()) bounds = bounds ? bounds.extend(b2) : b2;
+    }
+
+    if (bounds && bounds.isValid()){
+      map.fitBounds(bounds.pad(0.2));
+    }
   }
 
   // ====== UI：本地 KMZ 載入 + 拖放 ======
@@ -281,14 +347,13 @@
     }catch(err){ alert('KMZ 讀取失敗：'+(err?.message||err)); }
   });
 
-  // ====== 啟動：支援 query 參數 ?kmzbase=../example/&kmz=example.kmz ======
+  // ====== 啟動：支援 ?kmzbase=../example/&kmz=example.kmz ======
   (async function bootFromQuery(){
     const sp = new URLSearchParams(location.search);
     const kmz = sp.get('kmz');
     const base = sp.get('kmzbase');
     if (!kmz) return;
     try {
-      // 若有 base，以 base 為相對根；否則用目前頁面為根
       const baseUrl = base ? new URL(base, location.href) : new URL('.', location.href);
       const kmzUrl  = new URL(kmz, baseUrl).toString();
       await loadKmzFromUrl(kmzUrl);
